@@ -202,6 +202,11 @@ table.lines td.q{width:76px}table.lines td.c{width:44px;text-align:center}table.
 
 
 /* ---- compact controls ---- */
+.cline{padding:10px 0;border-bottom:1px solid var(--line)}.cline:first-child{padding-top:0}
+.cnums{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:10px;margin-top:8px;align-items:end}
+.cnums span{display:block;font-size:13px;color:var(--muted)}.cnums b{display:block;font-size:18px;padding:9px 0}
+.cnums input{font-size:18px;font-weight:600}
+.card.loan{border-left:4px solid var(--warn)}.card.loan.in{border-left-color:var(--info)}
 .subtabs.adm button{white-space:nowrap;padding:7px 6px}
 .rulerow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:12px 14px;border:0;border-bottom:1px solid var(--line);background:none;cursor:pointer;color:var(--ink)}
 .rulerow:last-child{border-bottom:0}.rulerow>.i{color:var(--muted)}.rulerow.off{opacity:.6}
@@ -347,6 +352,7 @@ const IC = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   back: '<path d="m15 5-7 7 7 7"/>',
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  upload: '<path d="M12 16V5M7 10l5-5 5 5M5 20h14"/>',
   share: '<path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/>',
   camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   torch: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>',
@@ -598,15 +604,15 @@ async function quietRefresh() {
 /* ---------------- navigation ---------------- */
 async function go(view) {
   await stopScanner();
-  const need = { scan: 'scan', scanSlip: 'scan', slips: 'editSlips', slipsEdit: 'editSlips', admin: 'admin', stockIn: 'scan', stockOpen: 'editSlips' }[view];
+  const need = { scan: 'scan', scanSlip: 'scan', slips: 'editSlips', slipsEdit: 'editSlips', admin: 'admin', stockIn: 'scan', stockOpen: 'editSlips', stockCount: 'editSlips', loans: 'scan', loanEdit: 'scan' }[view];
   if (need && !can(need)) view = 'search';
   S.view = view; hideViews();
-  const tab = ({ scanSlip: 'scan', slipsEdit: 'slips', stockItem: 'stock', stockIn: 'stock', stockOpen: 'stock' })[view] || view;
+  const tab = ({ scanSlip: 'scan', slipsEdit: 'slips', stockItem: 'stock', stockIn: 'stock', stockOpen: 'stock', stockCount: 'stock', loans: 'stock', loanEdit: 'stock' })[view] || view;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === tab));
   $(({ scan: '#v-scan', scanSlip: '#v-scan', slips: '#v-slips', slipsEdit: '#v-slips', search: '#v-search', admin: '#v-admin',
-     stock: '#v-stock', stockItem: '#v-stock', stockIn: '#v-stock', stockOpen: '#v-stock' })[view]).hidden = false;
+     stock: '#v-stock', stockItem: '#v-stock', stockIn: '#v-stock', stockOpen: '#v-stock', stockCount: '#v-stock', loans: '#v-stock', loanEdit: '#v-stock' })[view]).hidden = false;
   ({ scan: renderScanList, scanSlip: renderScanSlip, slips: renderSlipList, slipsEdit: renderEditor, search: renderSearch, admin: renderAdmin,
-     stock: renderStock, stockItem: renderStockItem, stockIn: renderStockIn, stockOpen: renderStockOpen })[view]();
+     stock: renderStock, stockItem: renderStockItem, stockIn: renderStockIn, stockOpen: renderStockOpen, stockCount: renderStockCount, loans: renderLoans, loanEdit: renderLoanEdit })[view]();
   window.scrollTo(0, 0);
 }
 
@@ -1517,7 +1523,8 @@ function stateBadge(s) {
   return `<span class="badge st ${cls}">${label}</span>`;
 }
 const missingFn = e => /PGRST202|could not find the function|function .* does not exist|stock_|42883|42P01|PGRST205/i.test((e && (e.code + ' ' + e.message)) || '');
-const v4Hint = e => missingFn(e) ? 'This needs the latest database update: run upgrade_v4.sql in Supabase.' : errMsg(e);
+const v4Hint = e => missingFn(e) || /loan_balance|save_loan|save_stock_count|PGRST205/.test((e && (e.code + ' ' + e.message)) || '')
+  ? `This needs the latest database update: run ${/loan|stock_count|PGRST205/.test((e && (e.code + ' ' + e.message)) || '') ? 'upgrade_v5_stock_count_loans.sql' : 'upgrade_v4.sql'} in Supabase.` : errMsg(e);
 
 function delivInfo(s) {
   if (!s.delivered_at) return can('scan') ? `<button class="btn pri" style="width:100%" onclick="deliverSlip('${s.id}')">${ic('truck')}Mark as delivered</button>` : '';
@@ -1573,7 +1580,15 @@ async function refreshAfterDelivery(id) {
 // Same rule as public.stock_key() in the database: the [CODE] identifies a product, else the tidied name
 const stockKey = p => { const m = /^\s*\[([^\]]+)\]/.exec(p || ''); return m ? m[1].trim().toUpperCase() : String(p || '').trim().replace(/\s+/g, ' ').toLowerCase(); };
 const fmtDay = d => { const x = new Date(d + 'T00:00:00'); return x.toLocaleDateString('en-GB', x.getFullYear() === new Date().getFullYear() ? { day: '2-digit', month: 'short' } : { day: '2-digit', month: 'short', year: '2-digit' }); };
-const KIND = { opening: 'Opening stock', receipt: 'Receipt (Odoo)', manual_in: 'Stock in', delivery: 'Delivery', adjust: 'Adjustment' };
+const KIND = { opening: 'Opening stock', receipt: 'Receipt (Odoo)', manual_in: 'Stock in', delivery: 'Delivery', adjust: 'Stock count correction',
+  lend_out: 'Lent out', lend_return: 'Loan returned to us', borrow_in: 'Borrowed in', borrow_return: 'Borrowed goods returned' };
+const LOAN_KINDS = ['lend_out', 'lend_return', 'borrow_in', 'borrow_return'];
+const LOAN = {   // sign = effect on our physical stock
+  lend_out:      { sign: -1, title: 'Lend to a company',            party: 'Lent to',        btn: 'Save loan' },
+  lend_return:   { sign:  1, title: 'Company returns what we lent', party: 'Returned by',    btn: 'Save return' },
+  borrow_in:     { sign:  1, title: 'Borrow from a company',        party: 'Borrowed from',  btn: 'Save borrowing' },
+  borrow_return: { sign: -1, title: 'We return what we borrowed',   party: 'Returned to',    btn: 'Save return' } };
+const ADJ_REASONS = ['Physical count difference', 'Damaged', 'Lost / missing', 'Used internally', 'Found extra', 'Other'];
 const fmtQ = q => { const n = Number(q) || 0; return (Math.round(n * 1000) / 1000).toLocaleString('en-GB'); };
 const todayISO = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
 function stockBranch() { if (ONE_BRANCH) return ONE_BRANCH; if (!S.stockBranch) S.stockBranch = S.me.branch && CONFIG.BRANCHES.includes(S.me.branch) ? S.me.branch : CONFIG.BRANCHES[0]; return S.stockBranch; }
@@ -1589,14 +1604,17 @@ function renderStock() {
   $('#v-stock').innerHTML = `
     <div class="pagehead"><div class="grow"><h2>Stock register</h2>${ONE_BRANCH ? `<div class="sub">${esc(ONE_BRANCH)} warehouse</div>` : ''}</div>
       ${can('scan') ? `<button class="btn pri sm" onclick="newStockIn()">${ic('plus')}Stock in</button>` : ''}</div>
-    ${can('editSlips') ? `<div class="row" style="margin:-4px 0 12px"><button class="btn sm" onclick="go('stockOpen')">Import opening stock</button></div>` : ''}
+    <div class="row" style="margin:-4px 0 12px;gap:6px">
+      ${can('scan') ? `<button class="btn sm" onclick="go('loans')">${ic('swap')}Borrow &amp; lend</button>` : ''}
+      ${can('editSlips') ? `<button class="btn sm" onclick="newStockCount()">${ic('check')}Count / correct</button>
+        <button class="btn sm" onclick="go('stockOpen')">Import opening stock</button>` : ''}</div>
     <div class="row" style="margin-bottom:10px">
       ${ONE_BRANCH ? '' : `<select id="stBr" style="width:auto">${CONFIG.BRANCHES.map(b => `<option ${b === br ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>`}
       ${sub === 'bal' ? `<input id="stQ" class="grow" style="flex:1 1 160px" placeholder="Search product" value="${esc(S.stockQ || '')}">` : '<div class="grow"></div>'}
     </div>
     <div class="subtabs" style="margin-bottom:10px">
       <button class="${sub === 'bal' ? 'on' : ''}" onclick="S.stockSub='bal';renderStock()">Balances</button>
-      <button class="${sub === 'docs' ? 'on' : ''}" onclick="S.stockSub='docs';renderStock()">Stock in history</button></div>
+      <button class="${sub === 'docs' ? 'on' : ''}" onclick="S.stockSub='docs';renderStock()">History</button></div>
     <div id="stockBody"><div class="empty">Loading…</div></div>`;
   if ($('#stBr')) $('#stBr').onchange = e => { S.stockBranch = e.target.value; renderStock(); };
   if (sub === 'bal') { $('#stQ').oninput = e => { S.stockQ = e.target.value; drawBalances(); }; loadBalances(); }
@@ -1676,15 +1694,16 @@ async function loadStockDocs() {
   if (S.view !== 'stock' || br !== stockBranch()) return;
   const box = $('#stockBody');
   if (error) { box.innerHTML = `<div class="alert err">${ic('warn')}<span>${esc(v4Hint(error))}</span></div>`; return; }
-  if (!data.length) { box.innerHTML = '<div class="empty">No stock-in or opening documents for this branch yet.</div>'; return; }
+  if (!data.length) { box.innerHTML = '<div class="empty">No stock documents for this branch yet.</div>'; return; }
   box.innerHTML = data.map(d => { const tot = d.stock_moves.reduce((a, m) => a + (+m.qty), 0); return `<div class="card" style="margin-bottom:8px">
-    <div class="row"><b class="grow">${KIND[d.kind] || d.kind}${d.ref && d.kind !== 'opening' ? ' · <span class="mono">' + esc(d.ref) + '</span>' : ''}</b><span class="badge">${d.stock_moves.length} line(s)</span></div>
-    <div class="small">${d.party ? esc(d.party) + ' · ' : ''}${fmtDate(d.doc_date)} · total ${fmtQ(tot)}</div>
+    <div class="row"><b class="grow">${KIND[d.kind] || d.kind}${d.ref && d.kind !== 'opening' ? (d.kind === 'adjust' ? ' · ' + esc(d.ref) : ' · <span class="mono">' + esc(d.ref) + '</span>') : ''}</b><span class="badge">${d.stock_moves.length} line(s)</span></div>
+    <div class="small">${d.party ? esc(d.party) + ' · ' : ''}${fmtDate(d.doc_date)} · ${d.kind === 'adjust' ? `net ${tot > 0 ? '+' : ''}${fmtQ(tot)}` : `total ${fmtQ(Math.abs(tot))}`}</div>
     <div class="muted small">${d.created_by ? 'by ' + esc(d.created_by) + ' · ' : ''}${fmtDT(d.created_at)}${d.file_name ? ' · ' + esc(d.file_name) : ''}${d.notes ? ' · ' + esc(d.notes) : ''}</div>
-    ${can('editSlips') ? `<div class="row" style="margin-top:8px"><button class="btn sm danger" onclick="deleteStockDoc('${d.id}','${d.kind}')">Delete</button></div>` : ''}</div>`; }).join('');
+    ${d.kind === 'adjust' ? '<div class="muted small" style="margin-top:6px">Corrections stay in the record. To fix one, do a new count.</div>'
+      : can('editSlips') ? `<div class="row" style="margin-top:8px"><button class="btn sm danger" onclick="deleteStockDoc('${d.id}','${d.kind}')">Delete</button></div>` : ''}</div>`; }).join('');
 }
 async function deleteStockDoc(id, kind) {
-  if (!confirm(kind === 'opening' ? 'Delete the opening stock for this branch? Balances will then start from zero.' : 'Delete this stock-in? Its quantities are removed from the register.')) return;
+  if (!confirm(kind === 'opening' ? 'Delete the opening stock for this branch? Balances will then start from zero.' : `Delete this ${(KIND[kind] || 'document').toLowerCase()}? Its quantities are removed from the register.`)) return;
   const { data, error } = await S.sb.from('stock_docs').delete().eq('id', id).select('id');
   if (error) return apiFail(error);
   if (!data.length) return toast('Only office or admin can delete', 'warn');
@@ -1788,6 +1807,237 @@ async function saveStockIn() {
     return toast(error.code === '23505' ? `Receipt ${e.ref} is already recorded for ${e.branch}` : v4Hint(error), 'err', 6000);
   }
   toast(`Stock in saved: ${lines.length} line(s)`, 'ok'); S.stockBranch = e.branch; S.stockSub = 'bal'; go('stock');
+}
+
+
+/* ---------- shared: product list + current balances for a branch ---------- */
+async function branchBalances(br) {
+  const { data, error } = await S.sb.from('stock_balance').select('product_key,product_name,qty').eq('branch', br).order('product_name').limit(5000);
+  if (error) throw error;
+  const map = {}; (data || []).forEach(r => map[r.product_key] = r);
+  return { rows: data || [], map };
+}
+const prodOptions = rows => [...new Set(rows.map(r => r.product_name))].map(n => `<option value="${esc(n)}">`).join('');
+
+/* =============================== STOCK COUNT / CORRECTION =============================== */
+// Office counts the shelf and types what is really there. The database works out the difference
+// against the balance at the moment of saving, so a delivery made meanwhile can't distort it.
+function newStockCount() {
+  S.cnt = { branch: stockBranch(), date: todayISO(), reason: ADJ_REASONS[0], notes: '', lines: [{ product: '', counted: '' }] };
+  go('stockCount');
+}
+async function renderStockCount() {
+  const e = S.cnt;
+  $('#v-stock').innerHTML = `<div class="row" style="margin-bottom:12px"><button class="btn sm ghost" onclick="go('stock')">${ic('back')}Back</button>
+      <h2 class="grow" style="margin-left:6px">Stock count</h2></div>
+    <div class="muted small" style="margin:-4px 0 12px">Type what is physically on the shelf. The app records the difference as a correction; the history is kept.</div>
+    <div class="card stack" style="margin-bottom:12px">
+      <div class="grid2 keep">
+        <div ${ONE_BRANCH ? 'hidden' : ''}><label>Branch</label><select data-c="branch">${CONFIG.BRANCHES.map(b => `<option>${esc(b)}</option>`).join('')}</select></div>
+        <div><label>Count date</label><input type="date" data-c="date"></div>
+        <div><label>Reason</label><select data-c="reason">${ADJ_REASONS.map(r => `<option>${esc(r)}</option>`).join('')}</select></div></div>
+      <div><label>Notes</label><input data-c="notes" placeholder="e.g. Month-end count, shelf B"></div></div>
+    <div class="card" style="margin-bottom:12px">
+      <div id="cnLines"></div>
+      <datalist id="prodList"></datalist>
+      <button class="btn sm" style="margin-top:8px" onclick="cntCollect();S.cnt.lines.push({product:'',counted:''});drawCntLines()">${ic('plus')}Add product</button></div>
+    <div class="row"><div class="muted small grow" id="cnSum"></div><button class="btn pri" id="cnSave" onclick="saveStockCount()">Save corrections</button></div>`;
+  document.querySelectorAll('[data-c]').forEach(i => { i.value = e[i.dataset.c] ?? ''; i.onchange = async () => { const old = e.branch; cntCollect(); if (e.branch !== old) { S.cntBal = null; await loadCntBal(); } drawCntLines(); }; });
+  drawCntLines(); await loadCntBal(); drawCntLines();
+}
+async function loadCntBal() {
+  try { S.cntBal = await branchBalances(S.cnt.branch); if ($('#prodList')) $('#prodList').innerHTML = prodOptions(S.cntBal.rows); }
+  catch (err) { toast(v4Hint(err), 'err', 5000); }
+}
+function cntSystem(product) {
+  if (!S.cntBal || !String(product).trim()) return null;
+  const r = S.cntBal.map[stockKey(product)];
+  return r ? +r.qty : 0;
+}
+function drawCntLines() {
+  const box = $('#cnLines'); if (!box) return;
+  box.innerHTML = S.cnt.lines.map((l, i) => {
+    const sys = cntSystem(l.product), has = l.counted !== '' && l.counted != null && sys != null, d = has ? +l.counted - sys : null;
+    return `<div class="cline"><div class="row" style="flex-wrap:nowrap"><input class="grow" data-l="${i}" data-k="product" list="prodList" value="${esc(l.product)}" placeholder="Product (type to pick)">
+        <button class="btn sm danger" aria-label="Remove" onclick="cntCollect();S.cnt.lines.splice(${i},1);drawCntLines()">×</button></div>
+      <div class="cnums"><div><span>System</span><b>${sys == null ? '—' : fmtQ(sys)}</b></div>
+        <div><span>Counted</span><input data-l="${i}" data-k="counted" type="number" min="0" step="any" inputmode="decimal" value="${esc(l.counted)}" placeholder="0"></div>
+        <div><span>Difference</span><b style="color:${d == null || d === 0 ? 'var(--muted)' : d < 0 ? 'var(--err)' : 'var(--ok)'}">${d == null ? '—' : d === 0 ? 'None' : (d > 0 ? '+' : '') + fmtQ(d)}</b></div></div></div>`; }).join('');
+  box.querySelectorAll('input').forEach(i => i.onchange = () => { cntCollect(); drawCntLines(); });
+  const ch = S.cnt.lines.filter(l => { const s0 = cntSystem(l.product); return l.counted !== '' && s0 != null && +l.counted !== s0; }).length;
+  if ($('#cnSum')) $('#cnSum').textContent = ch ? `${ch} product${ch > 1 ? 's' : ''} will be corrected.` : 'No differences yet.';
+}
+function cntCollect() {
+  const e = S.cnt;
+  document.querySelectorAll('[data-c]').forEach(i => e[i.dataset.c] = i.value);
+  document.querySelectorAll('#cnLines [data-l]').forEach(i => { const l = e.lines[+i.dataset.l]; if (l) l[i.dataset.k] = i.value; });
+  return e;
+}
+async function saveStockCount() {
+  const e = cntCollect();
+  const lines = e.lines.filter(l => String(l.product).trim() && l.counted !== '' && Number(l.counted) >= 0)
+    .map(l => ({ product: String(l.product).trim(), counted: Number(l.counted) }));
+  if (!lines.length) return toast('Enter at least one product and its counted quantity', 'warn');
+  const unknown = lines.filter(l => !S.cntBal || !S.cntBal.map[stockKey(l.product)]);
+  if (unknown.length && !confirm(`${unknown.map(l => l.product).join(', ')} ${unknown.length > 1 ? 'are' : 'is'} not in the ${e.branch} register yet. Add with the counted quantity?`)) return;
+  const btn = $('#cnSave'); btn.disabled = true; btn.textContent = 'Saving…';
+  const { data, error } = await S.sb.rpc('save_stock_count', { p_branch: e.branch, p_date: e.date, p_reason: e.reason, p_notes: e.notes, p_lines: lines });
+  btn.disabled = false; btn.textContent = 'Save corrections';
+  if (error) return toast(v4Hint(error), 'err', 6000);
+  const n = data && data.changed != null ? data.changed : lines.length;
+  toast(n ? `${n} correction${n > 1 ? 's' : ''} saved` : 'Counts match the system. Nothing to correct.', 'ok', 4000);
+  S.stockBranch = e.branch; S.stockSub = 'bal'; go('stock');
+}
+
+/* =============================== BORROW & LEND =============================== */
+// Goods lent to or borrowed from other companies, and their returns. Every movement changes the
+// physical stock; the open list shows what is still out (owed to us) or still with us (we owe).
+async function renderLoans() {
+  const br = stockBranch(), sub = S.loanSub || 'open';
+  $('#v-stock').innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn sm ghost" onclick="go('stock')">${ic('back')}Stock</button>
+      <h2 class="grow" style="margin-left:6px">Borrow &amp; lend</h2></div>
+    <div class="grid2 keep" style="margin-bottom:12px">
+      <button class="btn pri" onclick="newLoan('lend_out')">${ic('upload')}Lend out</button>
+      <button class="btn pri" onclick="newLoan('borrow_in')">${ic('download')}Borrow in</button></div>
+    <div class="row" style="margin-bottom:10px">
+      ${ONE_BRANCH ? '' : `<select id="lnBr" style="width:auto">${CONFIG.BRANCHES.map(b => `<option ${b === br ? 'selected' : ''}>${esc(b)}</option>`).join('')}</select>`}
+      <div class="subtabs grow" style="margin:0"><button class="${sub === 'open' ? 'on' : ''}" onclick="S.loanSub='open';renderLoans()">Still open</button>
+        <button class="${sub === 'all' ? 'on' : ''}" onclick="S.loanSub='all';renderLoans()">All records</button></div></div>
+    <div id="lnBody"><div class="empty">Loading…</div></div>`;
+  if ($('#lnBr')) $('#lnBr').onchange = ev => { S.stockBranch = ev.target.value; renderLoans(); };
+  sub === 'open' ? loadLoanOpen() : loadLoanDocs();
+}
+async function loanOpenRows(br) {
+  const { data, error } = await S.sb.from('loan_balance').select('*').eq('branch', br).order('party').order('product_name');
+  if (error) throw error;
+  return data || [];
+}
+async function loadLoanOpen() {
+  const br = stockBranch(), box = $('#lnBody');
+  let rows; try { rows = await loanOpenRows(br); } catch (err) { box.innerHTML = `<div class="alert err">${ic('warn')}<span>${esc(v4Hint(err))}</span></div>`; return; }
+  if (S.view !== 'loans') return;
+  S.loanRows = rows;
+  const days = d => d ? Math.max(0, Math.floor((Date.now() - new Date(d + 'T00:00:00')) / 864e5)) : 0;
+  const block = (title, hint, key, retKind, tone) => {
+    const open = rows.filter(r => +r[key] > 0), parties = [...new Set(open.map(r => r.party))];
+    return `<div class="listhead">${title} <span class="cnt">${parties.length}</span></div>
+      <div class="muted small" style="margin:-4px 2px 8px">${hint}</div>
+      ${parties.length ? parties.map(p => { const items = open.filter(r => r.party === p), since = items.map(r => r.first_date).sort()[0];
+        return `<div class="card loan ${tone}" style="margin-bottom:8px"><div class="row" style="flex-wrap:nowrap"><b class="grow">${esc(p)}</b>
+            <span class="badge ${days(since) > 30 ? 'bad' : 'warn'}">${days(since)} day${days(since) === 1 ? '' : 's'}</span></div>
+          <div class="small muted" style="margin-bottom:6px">Since ${esc(fmtDate(since))}</div>
+          ${items.map(r => `<div class="row small" style="flex-wrap:nowrap;padding:3px 0"><span class="grow">${esc(r.product_name)}</span><b>${fmtQ(r[key])}</b></div>`).join('')}
+          ${can('scan') ? `<button class="btn sm" style="margin-top:8px" data-p="${esc(p)}" data-k="${retKind}" onclick="newLoan(this.dataset.k, this.dataset.p)">Record return</button>` : ''}</div>`; }).join('')
+      : '<div class="empty" style="padding:14px">Nothing open.</div>'}`;
+  };
+  box.innerHTML = block('Lent out', 'Our goods with other companies. They owe these back.', 'lent_open', 'lend_return', 'out')
+    + block('Borrowed', 'Other companies’ goods in our stock. We owe these back.', 'borrowed_open', 'borrow_return', 'in')
+    + (rows.length ? `<div class="row" style="margin-top:12px"><div class="grow"></div><button class="btn sm" onclick="exportLoans()">${ic('download')}CSV</button></div>` : '');
+}
+function exportLoans() {
+  const br = stockBranch();
+  csvDownload(`Borrow and lend ${br} ${todayISO()}.csv`, [['Branch', 'Company', 'Product', 'Lent out', 'Returned to us', 'Still with them', 'Borrowed in', 'We returned', 'Still with us', 'First movement', 'Last movement'],
+    ...(S.loanRows || []).map(r => [br, r.party, r.product_name, +r.lent_out, +r.lent_returned, +r.lent_open, +r.borrowed_in, +r.borrowed_returned, +r.borrowed_open, r.first_date || '', r.last_date || ''])]);
+}
+async function loadLoanDocs() {
+  const br = stockBranch(), box = $('#lnBody');
+  const { data, error } = await S.sb.from('stock_docs').select('*, stock_moves(qty,product_name)').eq('branch', br).in('kind', LOAN_KINDS)
+    .order('doc_date', { ascending: false }).order('created_at', { ascending: false }).limit(200);
+  if (S.view !== 'loans') return;
+  if (error) { box.innerHTML = `<div class="alert err">${ic('warn')}<span>${esc(v4Hint(error))}</span></div>`; return; }
+  if (!data.length) { box.innerHTML = '<div class="empty">No borrowing or lending recorded yet.</div>'; return; }
+  box.innerHTML = data.map(d => { const L = LOAN[d.kind]; return `<div class="card" style="margin-bottom:8px">
+    <div class="row" style="flex-wrap:nowrap"><b class="grow">${esc(KIND[d.kind])}</b><span class="badge ${L.sign < 0 ? 'warn' : 'ok'}">Stock ${L.sign < 0 ? 'out' : 'in'}</span></div>
+    <div class="small"><b>${esc(d.party || '')}</b> · ${esc(fmtDate(d.doc_date))}${d.ref ? ' · <span class="mono">' + esc(d.ref) + '</span>' : ''}</div>
+    ${d.stock_moves.map(m => `<div class="row small" style="flex-wrap:nowrap;padding:2px 0"><span class="grow">${esc(m.product_name)}</span><b>${fmtQ(Math.abs(m.qty))}</b></div>`).join('')}
+    <div class="muted small">${d.created_by ? 'by ' + esc(d.created_by) + ' · ' : ''}${fmtDT(d.created_at)}${d.notes ? ' · ' + esc(d.notes) : ''}</div>
+    ${can('editSlips') ? `<div class="row" style="margin-top:8px"><button class="btn sm danger" onclick="deleteLoanDoc('${d.id}')">Delete</button></div>` : ''}</div>`; }).join('');
+}
+async function deleteLoanDoc(id) {
+  if (!confirm('Delete this record? Its quantities are removed from the stock register and the open list.')) return;
+  const { data, error } = await S.sb.from('stock_docs').delete().eq('id', id).select('id');
+  if (error) return apiFail(error);
+  if (!data.length) return toast('Only office or admin can delete', 'warn');
+  toast('Deleted'); loadLoanDocs();
+}
+
+async function newLoan(kind, party) {
+  S.ln = { kind, branch: stockBranch(), date: todayISO(), party: party || '', ref: '', notes: '', lines: [{ product: '', qty: 1 }] };
+  // a return starts with everything still open for that company
+  if (party && (kind === 'lend_return' || kind === 'borrow_return')) {
+    const key = kind === 'lend_return' ? 'lent_open' : 'borrowed_open';
+    const open = (S.loanRows || []).filter(r => r.party === party && +r[key] > 0);
+    if (open.length) S.ln.lines = open.map(r => ({ product: r.product_name, qty: +r[key] }));
+  }
+  go('loanEdit');
+}
+async function renderLoanEdit() {
+  const e = S.ln, L = LOAN[e.kind];
+  $('#v-stock').innerHTML = `<div class="row" style="margin-bottom:12px"><button class="btn sm ghost" onclick="go('loans')">${ic('back')}Back</button>
+      <h2 class="grow" style="margin-left:6px">${esc(L.title)}</h2></div>
+    <div class="alert ${L.sign < 0 ? 'warn' : ''}" style="margin-bottom:12px;${L.sign > 0 ? 'background:var(--ok-bg);color:var(--ok)' : ''}">${ic(L.sign < 0 ? 'upload' : 'download')}
+      <span>These quantities ${L.sign < 0 ? '<b>leave</b>' : '<b>come into</b>'} the ${esc(e.branch)} stock.</span></div>
+    <div class="card stack" style="margin-bottom:12px">
+      <div><label>Type</label><select data-n="kind">${LOAN_KINDS.map(k => `<option value="${k}">${esc(LOAN[k].title)}</option>`).join('')}</select></div>
+      <div class="grid2 keep">
+        <div><label>${esc(L.party)} (company) *</label><input data-n="party" list="partyList" placeholder="Company name"></div>
+        <div><label>Date *</label><input type="date" data-n="date"></div>
+        <div><label>Ref (waybill / letter)</label><input data-n="ref" placeholder="Optional"></div>
+        <div ${ONE_BRANCH ? 'hidden' : ''}><label>Branch</label><select data-n="branch">${CONFIG.BRANCHES.map(b => `<option>${esc(b)}</option>`).join('')}</select></div></div>
+      <div><label>Notes</label><input data-n="notes" placeholder="e.g. who collected, serial numbers, agreed return date"></div>
+      <datalist id="partyList"></datalist><div class="small" id="lnWarn" style="color:var(--warn)"></div></div>
+    <div class="card" style="margin-bottom:12px"><h3>Products</h3>
+      <table class="lines"><tbody id="lnLines"></tbody></table><datalist id="prodList"></datalist>
+      <button class="btn sm" style="margin-top:8px" onclick="lnCollect();S.ln.lines.push({product:'',qty:1});drawLnLines()">${ic('plus')}Add line</button></div>
+    <div class="row"><div class="grow"></div><button class="btn pri" id="lnSave" onclick="saveLoan()">${esc(L.btn)}</button></div>`;
+  document.querySelectorAll('[data-n]').forEach(i => { i.value = e[i.dataset.n] ?? ''; i.onchange = () => { const k = e.kind; lnCollect(); if (e.kind !== k) return renderLoanEdit(); checkLoanReturn(); }; });
+  drawLnLines();
+  try {
+    const [bal, open] = await Promise.all([branchBalances(e.branch), loanOpenRows(e.branch)]);
+    S.loanRows = open;
+    if ($('#prodList')) $('#prodList').innerHTML = prodOptions(bal.rows.concat(open.map(r => ({ product_name: r.product_name }))));
+    if ($('#partyList')) $('#partyList').innerHTML = [...new Set(open.map(r => r.party))].map(p => `<option value="${esc(p)}">`).join('');
+  } catch (err) {}
+  checkLoanReturn();
+}
+function drawLnLines() {
+  $('#lnLines').innerHTML = S.ln.lines.map((l, i) => `<tr>
+    <td><input data-l="${i}" data-k="product" list="prodList" value="${esc(l.product)}" placeholder="Product (type to pick)"></td>
+    <td class="q"><input data-l="${i}" data-k="qty" type="number" min="0" step="any" inputmode="decimal" value="${esc(l.qty)}"></td>
+    <td class="x"><button class="btn sm danger" aria-label="Remove" onclick="lnCollect();S.ln.lines.splice(${i},1);drawLnLines()">×</button></td></tr>`).join('');
+  $('#lnLines').querySelectorAll('input').forEach(i => i.onchange = () => { lnCollect(); checkLoanReturn(); });
+}
+function lnCollect() {
+  const e = S.ln;
+  document.querySelectorAll('[data-n]').forEach(i => e[i.dataset.n] = i.value);
+  document.querySelectorAll('#lnLines [data-l]').forEach(i => { const l = e.lines[+i.dataset.l]; if (l) l[i.dataset.k] = i.dataset.k === 'qty' ? Number(i.value) : i.value; });
+  return e;
+}
+// A return should not exceed what is still open with that company
+function loanReturnIssues() {
+  const e = S.ln; if (e.kind !== 'lend_return' && e.kind !== 'borrow_return') return [];
+  const key = e.kind === 'lend_return' ? 'lent_open' : 'borrowed_open', party = e.party.trim().toLowerCase();
+  return e.lines.filter(l => String(l.product).trim() && +l.qty > 0).map(l => {
+    const r = (S.loanRows || []).find(x => x.party.trim().toLowerCase() === party && x.product_key === stockKey(l.product));
+    const open = r ? +r[key] : 0;
+    return +l.qty > open ? `${l.product}: returning ${fmtQ(l.qty)}, only ${fmtQ(open)} open` : '';
+  }).filter(Boolean);
+}
+function checkLoanReturn() { const w = $('#lnWarn'); if (w) w.textContent = loanReturnIssues().join(' · '); }
+async function saveLoan() {
+  const e = lnCollect(), L = LOAN[e.kind];
+  const lines = e.lines.filter(l => String(l.product).trim() && Number(l.qty) > 0).map(l => ({ product: String(l.product).trim(), qty: Number(l.qty) }));
+  if (!e.party.trim()) return toast('Enter the company name', 'warn');
+  if (!lines.length) return toast('Add at least one product with a quantity', 'warn');
+  if (!e.date) return toast('Enter the date', 'warn');
+  const issues = loanReturnIssues();
+  if (issues.length && !confirm(`More than what is open:\n${issues.join('\n')}\n\nSave anyway?`)) return;
+  const btn = $('#lnSave'); btn.disabled = true; btn.textContent = 'Saving…';
+  const { error } = await S.sb.rpc('save_loan', { p_kind: e.kind, p_branch: e.branch, p_date: e.date, p_party: e.party.trim(),
+    p_ref: e.ref, p_notes: e.notes, p_lines: lines });
+  btn.disabled = false; btn.textContent = L.btn;
+  if (error) return toast(v4Hint(error), 'err', 6000);
+  toast(`${KIND[e.kind]} saved: ${lines.length} line(s)`, 'ok'); S.stockBranch = e.branch; S.loanSub = 'open'; go('loans');
 }
 
 /* ---------- opening stock from the Odoo stock export (xlsx / csv) ---------- */
