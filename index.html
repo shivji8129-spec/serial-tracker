@@ -1294,7 +1294,7 @@ async function printSlip(id) {
     if (!window.PDFLib || !window.pdfjsLib) return toast('PDF tools did not load. Check the internet connection.', 'err');
     toast('Preparing slip…', '', 1500);
     const out = await buildSlipPdf(s, b64ToBytes(f.pdf_base64));
-    showSlipActions(s, out);
+    showSlipActions(s, out, f.file_name);
   } catch (e) { apiFail(e); }
 }
 
@@ -1411,12 +1411,26 @@ async function buildSlipPdf(s, orig) {
   return { bytes: await doc.save(), info };
 }
 
-function showSlipActions(s, out) {
+// Keep the name of the PDF Odoo gave us (it includes the customer); fall back to ref + customer
+function slipFileName(s, orig) {
+  const clean = t => String(t || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim();
+  const o = clean(orig);
+  if (/\.pdf$/i.test(o) && o.length > 4) return o;
+  return clean(`Delivery Slip - ${s.slip_ref}${s.customer_name ? ' - ' + s.customer_name : ''}`) + '.pdf';
+}
+// Browsers use the page title as the file name for "Save as PDF"
+function printAs(name, delay) {
+  const old = document.title; document.title = name.replace(/\.pdf$/i, '');
+  const back = () => { document.title = old; window.removeEventListener('afterprint', back); };
+  window.addEventListener('afterprint', back); setTimeout(back, 60000);
+  setTimeout(() => window.print(), delay);
+}
+function showSlipActions(s, out, origName) {
   const { info } = out;
   const missing = info.groups.filter(g => g.sns.length < g.qty);
   const where = info.placed === 'page1' ? 'written on the original slip'
     : info.placed === 'extra' ? `on ${info.extraPages} added page${info.extraPages > 1 ? 's' : ''} (not enough room on the slip)` : '';
-  S.pdfOut = { bytes: out.bytes, name: `Delivery Slip ${String(s.slip_ref).replace(/[\\/:*?"<>|]+/g, '-')} with serials.pdf` };
+  S.pdfOut = { bytes: out.bytes, name: slipFileName(s, origName) };
   openDlg(`<h3>${esc(s.slip_ref)} · ${esc(s.customer_name)}</h3>
     <div class="muted small" style="margin-bottom:10px">${info.total ? `<b>${info.total}</b> serial number(s) ${where}.` : 'No serials scanned yet. This is the plain Odoo slip.'}</div>
     ${missing.length ? `<div class="alert warn">${ic('warn')}<span>Not fully scanned: ${missing.map(g => `${esc(g.product)} (${g.sns.length} of ${g.qty})`).join(', ')}</span></div>` : ''}
@@ -1458,7 +1472,7 @@ async function printPdfPages() {
     $('#pageStyle').textContent = `@page{size:${pw}mm ${ph}mm;margin:0}`;
     closeDlg();
     await Promise.all([...pa.querySelectorAll('img')].map(i => i.decode ? i.decode().catch(() => {}) : null));
-    setTimeout(() => window.print(), 100);
+    printAs(S.pdfOut.name, 100);
   } catch (e) { toast('Could not prepare the print: ' + errMsg(e), 'err'); }
 }
 
@@ -1478,7 +1492,7 @@ function printBasic(s) {
     ${s.notes ? `<p><b>Notes:</b> ${esc(s.notes)}</p>` : ''}
     <div class="p-sign"><div>Packed by</div><div>Checked by</div><div>Received by (customer)</div></div>`;
   if (can('editSlips')) toast('No Odoo PDF stored for this slip. Attach it in Slips → Edit to print on the original.', 'warn', 4500);
-  setTimeout(() => window.print(), 150);
+  printAs(slipFileName(s), 150);
 }
 
 /* =============================== DELIVERY STATUS =============================== */
@@ -1891,7 +1905,7 @@ function ageText(iso) {
 function soldHtml(d) {
   const st = d.status === 'replaced' ? 'This unit was later replaced and taken back.' : d.status === 'returned' ? 'This unit was later returned to us.' : '';
   return `<div class="verdict ok">${ic('check')}<div><b class="vt">Sold by Solartech</b>
-    <div>Sold ${fmtDate(d.slip_date)}${d.slip_date ? ` (${ageText(d.slip_date)})` : ''} to ${esc(d.customer_name)}, slip ${esc(d.slip_ref)}.</div>
+    <div>Sold ${fmtDate(d.slip_date)}${d.slip_date ? ` (${ageText(d.slip_date)})` : ''} to ${esc(d.customer_name)}, slip ${esc(d.slip_ref)}${d.so_ref ? `, sales order ${esc(d.so_ref)}` : ''}.</div>
     ${st ? `<div style="margin-top:4px"><b>${st}</b></div>` : ''}</div></div>`;
 }
 function notOursHtml(sn, partial) {
@@ -1929,7 +1943,8 @@ async function doSearch(q) {
         <dt>Customer</dt><dd><b>${esc(d.customer_name)}</b></dd>
         ${d.customer_phone ? `<dt>Phone</dt><dd><a href="tel:${esc(d.customer_phone)}">${esc(d.customer_phone)}</a></dd>` : ''}
         ${d.customer_address ? `<dt>Address</dt><dd>${esc(d.customer_address)}</dd>` : ''}
-        <dt>Delivery slip</dt><dd class="mono">${esc(d.slip_ref)}${d.so_ref ? ' · ' + esc(d.so_ref) : ''}</dd>
+        <dt>Delivery slip</dt><dd class="mono">${esc(d.slip_ref)}</dd>
+        <dt>Sales order</dt><dd class="mono">${esc(d.so_ref || '—')}</dd>
         <dt>Delivered</dt><dd>${fmtDate(d.slip_date)}${d.branch ? ' · ' + esc(d.branch) : ''}</dd>
         <dt>Scanned</dt><dd class="muted">${esc(fmtDT(d.scanned_at))}${d.scanned_by ? ' by ' + esc(d.scanned_by) : ''}</dd>
         ${d.replaces ? `<dt>Replaces</dt><dd class="mono">${esc(d.replaces)}</dd>` : ''}
