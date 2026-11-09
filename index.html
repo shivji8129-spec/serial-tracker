@@ -1232,7 +1232,9 @@ function interpretSlip(lines, pageW, p1items) {
   const hdr = lines.findIndex(l => /product/i.test(l.text) && /(quantity|qty|delivered|ordered|done)/i.test(l.text));
   if (hdr >= 0) {
     const stop = /signature|^total|terms|thank|^notes?\b|received by|customer sign|remaining quantit|not yet delivered|back ?orders?\b/i;
-    const qtyRx = /^(.*?)\s+(\d+(?:[.,]\d+)?)\s*(?:units?|unit\(s\)|pcs?|nos?|pieces?|set|sets)?(?:\s+(\d+(?:[.,]\d+)?)\s*(?:units?|unit\(s\)|pcs?|nos?|pieces?|set|sets)?)?$/i;
+    // Any Odoo unit of measure: Units, pcs, m (cable), kg, L, rolls, boxes… so "50 m 50 m" reads as well as "1 Units 1 Units"
+    const UOM = '(?:units?|unit\\(s\\)|pcs?|nos?|pieces?|sets?|m|mtrs?|meters?|metres?|km|kgs?|g|l|ltrs?|liters?|litres?|ft|feet|yds?|rolls?|coils?|drums?|box(?:es)?|packs?|pairs?|dozens?|lengths?|cartons?|bags?|hours?|hrs?)';
+    const qtyRx = new RegExp(`^(.*?)\\s+(\\d+(?:[.,]\\d+)?)\\s*(?:${UOM}\\b)?(?:\\s+(\\d+(?:[.,]\\d+)?)\\s*(?:${UOM}\\b)?)?$`, 'i');
     // Page header/footer text (company contacts, page numbers) must never become a product or part of one
     const normA = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const ownAddr = (CONFIG.OWN_ADDRESSES || []).map(normA).filter(Boolean);
