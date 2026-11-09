@@ -1152,7 +1152,7 @@ async function importPdf(file) {
     if (got.lines.length && !e.id) e.lines = got.lines;
     else if (got.lines.length && e.id) toast('Products not replaced on an existing slip. Edit lines by hand.', 'warn', 4000);
     renderEditor();
-    $('#pdfMsg').innerHTML = `Read <b>${got.lines.length}</b> product line(s)${got.slip_ref ? ' from ' + esc(got.slip_ref) : ''}. Please check every field before saving.`
+    $('#pdfMsg').innerHTML = `Read <b>${got.lines.length}</b> product line(s)${got.slip_ref ? ' from ' + esc(got.slip_ref) : ''}. Please check every field before saving. <span class="muted small">(reader v2)</span>`
       + '<br>The original PDF will be kept with the slip, so it can be printed with the serial numbers on it.';
   } catch (err) { msg.textContent = 'Could not read this PDF: ' + errMsg(err); }
 }
