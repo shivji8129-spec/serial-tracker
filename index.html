@@ -671,17 +671,74 @@ function extractSerial(raw) {
 }
 
 /* ---------------- camera ---------------- */
+const SCAN_FORMATS = () => { const F = window.Html5QrcodeSupportedFormats;
+  return F ? [F.QR_CODE, F.CODE_128, F.CODE_39, F.CODE_93, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR, F.DATA_MATRIX] : undefined; };
 async function startScanner(elId, onCode) {
   await stopScanner();
   if (!window.Html5Qrcode) throw new Error('Scanner library did not load. Check the internet connection.');
   try { S.audio = S.audio || new (window.AudioContext || window.webkitAudioContext)(); S.audio.resume && S.audio.resume(); } catch (e) {}
-  const F = window.Html5QrcodeSupportedFormats;
-  const formats = F ? [F.QR_CODE, F.CODE_128, F.CODE_39, F.CODE_93, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF, F.CODABAR, F.DATA_MATRIX] : undefined;
-  const qr = new Html5Qrcode(elId, { formatsToSupport: formats, verbose: false, experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
-  S.scanner = qr; S.torch = false;
-  await qr.start({ facingMode: 'environment' },
-    { fps: 12, qrbox: (w, h) => ({ width: Math.max(120, Math.floor(Math.min(w * .92, 440))), height: Math.max(80, Math.floor(Math.min(h * .55, 210))) }) },
-    txt => onCode(txt), () => {});
+  const qr = new Html5Qrcode(elId, { formatsToSupport: SCAN_FORMATS(), verbose: false, experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
+  S.scanner = qr; S.torch = false; S.zoom = 1;
+  const box = (w, h) => ({ width: Math.max(160, Math.floor(w * .96)), height: Math.max(90, Math.floor(Math.min(h * .5, 240))) });
+  // High resolution + continuous focus so small, dense labels (thin bars) can be resolved
+  const hi = { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] };
+  try { await qr.start({ facingMode: 'environment' }, { fps: 15, qrbox: box, videoConstraints: hi }, txt => onCode(txt), () => {}); }
+  catch (e) { await qr.start({ facingMode: 'environment' }, { fps: 12, qrbox: box }, txt => onCode(txt), () => {}); }
+  // Zoom in a little where the phone allows it: staff can hold the phone further away, where it focuses sharply
+  const z = zoomRange(); if (z) { S.zoom = Math.min(z.max, Math.max(z.min, 2)); try { await qr.applyVideoConstraints({ advanced: [{ zoom: S.zoom }] }); } catch (e) { S.zoom = 1; } }
+  updZoomBtns();
+}
+function zoomRange() {
+  try { const c = S.scanner && S.scanner.getRunningTrackCapabilities(); return c && c.zoom && c.zoom.max > 1 ? c.zoom : null; } catch (e) { return null; }
+}
+async function cycleZoom() {
+  const z = zoomRange(); if (!z) { toast('Zoom not supported on this phone — use Photo instead', 'warn'); return; }
+  const steps = [1, 2, 3, 4].filter(v => v >= z.min && v <= z.max);
+  S.zoom = steps[(steps.indexOf(S.zoom) + 1) % steps.length] || 1;
+  try { await S.scanner.applyVideoConstraints({ advanced: [{ zoom: S.zoom }] }); } catch (e) {}
+  updZoomBtns();
+}
+function updZoomBtns() { document.querySelectorAll('.zoomBtn').forEach(b => { b.hidden = !S.scanner || !zoomRange(); b.textContent = (S.zoom || 1) + '×'; }); }
+
+/* Photo scan: the phone's full camera resolution (often 12 MP) reads tiny labels the live video can't */
+function photoScan(onCode) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    const wasLive = !!S.scanner; if (wasLive) await stopScanner();
+    toast('Reading photo…', 'info', 1500);
+    try { const codes = await decodePhoto(f);
+      if (!codes.length) { buzz('err'); toast('No barcode found. Hold the phone steady, fill the photo with the label, and avoid glare.', 'err', 5000); return; }
+      codes.forEach(c => onCode(c));
+    } catch (e) { buzz('err'); toast('Photo: ' + errMsg(e), 'err', 5000); }
+  };
+  inp.click();
+}
+async function decodePhoto(file) {
+  const img = await createImageBitmap(file);
+  const found = new Set();
+  // 1) Native detector (Android Chrome) — fast and good on full-resolution photos; returns every barcode on the label
+  if ('BarcodeDetector' in window) {
+    try { const d = new BarcodeDetector({ formats: ['code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'codabar', 'qr_code', 'data_matrix'] });
+      (await d.detect(img)).forEach(b => b.rawValue && found.add(b.rawValue)); } catch (e) {}
+    if (found.size) return [...found];
+  }
+  // 2) Library decoder on the full photo, then on overlapping horizontal bands and a contrast-boosted copy
+  let host = document.getElementById('photo-scan-host');
+  if (!host) { host = document.createElement('div'); host.id = 'photo-scan-host'; host.style.cssText = 'position:fixed;left:-9999px;top:0;width:1600px;height:10px'; document.body.appendChild(host); }
+  const dec = new Html5Qrcode('photo-scan-host', { formatsToSupport: SCAN_FORMATS(), verbose: false });
+  const W = img.width, H = img.height, crops = [[0, 0, W, H]];
+  for (let i = 0; i < 5; i++) crops.push([0, Math.floor(H * i / 6), W, Math.floor(H / 3)]);
+  crops.push([Math.floor(W * .1), Math.floor(H * .25), Math.floor(W * .8), Math.floor(H * .5)]);
+  for (const boost of [false, true]) for (const [x, y, w, h] of crops) {
+    const scale = Math.min(1, 1600 / w), c = document.createElement('canvas');
+    c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+    const g = c.getContext('2d'); if (boost) g.filter = 'grayscale(1) contrast(1.8)';
+    g.drawImage(img, x, y, w, h, 0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    try { const t = await dec.scanFile(new File([blob], 'p.png', { type: 'image/png' }), false); if (t) { found.add(t); return [...found]; } } catch (e) {}
+  }
+  return [...found];
 }
 async function stopScanner() {
   const q = S.scanner; S.scanner = null;
@@ -795,8 +852,11 @@ function renderScanSlip() {
       <div id="reader-slip"></div>
       <div class="row">
         <button class="btn pri grow" id="camBtn">${ic('camera')}Start camera</button>
+        <button class="btn zoomBtn" hidden aria-label="Zoom" onclick="cycleZoom()">2×</button>
         <button class="btn" id="torchBtn" hidden aria-label="Torch">${ic('torch')}</button>
+        <button class="btn" onclick="photoScan(raw => queueSerial(raw, 'photo'))">${ic('camera')}Photo</button>
       </div>
+      <div class="muted small">Small or faint label? Tap <b>Photo</b> and take a close, sharp picture of the label.</div>
       <form id="manForm" class="row">
         <input id="manIn" class="grow" placeholder="Or type / use a USB scanner here" autocomplete="off" autocapitalize="characters" style="flex:1 1 180px">
         <button class="btn">Add</button>
@@ -805,7 +865,7 @@ function renderScanSlip() {
     </div>
     <div id="lines" class="stack"></div>`;
   $('#camBtn').onclick = async () => {
-    if (S.scanner) { await stopScanner(); $('#camBtn').innerHTML = ic('camera') + 'Start camera'; $('#torchBtn').hidden = true; return; }
+    if (S.scanner) { await stopScanner(); $('#camBtn').innerHTML = ic('camera') + 'Start camera'; $('#torchBtn').hidden = true; updZoomBtns(); return; }
     try { await startScanner('reader-slip', raw => queueSerial(raw, 'camera')); $('#camBtn').innerHTML = ic('stop') + 'Stop camera'; $('#torchBtn').hidden = false; }
     catch (e) { toast('Camera: ' + errMsg(e), 'err', 5000); }
   };
@@ -2137,7 +2197,7 @@ function renderSearch() {
   $('#sForm').onsubmit = e => { e.preventDefault(); doSearch($('#sIn').value); };
   $('#sCam').onclick = () => {
     openDlg(`<h3>Scan a serial</h3><div id="reader-search"></div>
-      <div class="row" style="margin-top:12px"><button class="btn" onclick="toggleTorch()" aria-label="Torch">${ic('torch')}</button><div class="grow"></div><button class="btn" onclick="closeDlg()">Close</button></div>`);
+      <div class="row" style="margin-top:12px"><button class="btn" onclick="toggleTorch()" aria-label="Torch">${ic('torch')}</button><button class="btn zoomBtn" hidden onclick="cycleZoom()">2×</button><button class="btn" onclick="photoScan(raw => { const sn = extractSerial(raw); buzz('ok'); closeDlg(); $('#sIn').value = sn; doSearch(sn); })">${ic('camera')}Photo</button><div class="grow"></div><button class="btn" onclick="closeDlg()">Close</button></div>`);
     startScanner('reader-search', raw => { const sn = extractSerial(raw); buzz('ok'); closeDlg(); $('#sIn').value = sn; doSearch(sn); })
       .catch(e => { closeDlg(); toast('Camera: ' + errMsg(e), 'err', 5000); });
   };

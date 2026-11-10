@@ -1,7 +1,7 @@
 // Serial Tracker service worker: makes the app installable and opens it quickly.
 // The page itself is always fetched fresh first, so a new index.html on Netlify shows up straight away.
 // Database calls (Supabase) are never cached.
-const CACHE = 'serial-tracker-v3';
+const CACHE = 'serial-tracker-v4';
 // Paths are relative to this file, so the app works at a site root (Netlify) or in a sub-folder (GitHub Pages: /serial-tracker/)
 const BASE = new URL('./', self.location).href, PAGE = BASE + 'index.html';
 const SHELL = ['', 'index.html', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'].map(f => BASE + f);
